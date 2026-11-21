@@ -211,8 +211,8 @@ static uint16_t jerryPendingInterrupt = 0;
 
 // Private function prototypes
 
-void JERRYResetPIT1(void);
-void JERRYResetPIT2(void);
+void JERRYResetPIT1(uint32_t who);
+void JERRYResetPIT2(uint32_t who);
 void JERRYResetI2S(void);
 
 void JERRYPIT1Callback(void);
@@ -237,7 +237,7 @@ void JERRYResetI2S(void)
  * Doom and Rayman music timing.  Source: JTRM Rev 8 p.16.
  */
 
-void JERRYResetPIT1(void)
+void JERRYResetPIT1(uint32_t who)
 {
    RemoveCallback(JERRYPIT1Callback);
 
@@ -247,13 +247,13 @@ void JERRYResetPIT1(void)
          * (vjs.hardwareTypeNTSC ? RISC_CYCLE_IN_USEC : RISC_CYCLE_PAL_IN_USEC);
       /* Event times count from the start of the slice; a write
        * part-way through it restarts the count from the write. */
-      SetCallbackTime(JERRYPIT1Callback, usecs + JaguarSliceElapsedUs(),
+      SetCallbackTime(JERRYPIT1Callback, usecs + JaguarSliceElapsedUs(who),
                       EVENT_JERRY);
    }
 }
 
 
-void JERRYResetPIT2(void)
+void JERRYResetPIT2(uint32_t who)
 {
    RemoveCallback(JERRYPIT2Callback);
 
@@ -263,7 +263,7 @@ void JERRYResetPIT2(void)
          * (vjs.hardwareTypeNTSC ? RISC_CYCLE_IN_USEC : RISC_CYCLE_PAL_IN_USEC);
       /* Event times count from the start of the slice; a write
        * part-way through it restarts the count from the write. */
-      SetCallbackTime(JERRYPIT2Callback, usecs + JaguarSliceElapsedUs(),
+      SetCallbackTime(JERRYPIT2Callback, usecs + JaguarSliceElapsedUs(who),
                       EVENT_JERRY);
    }
 }
@@ -287,7 +287,7 @@ void JERRYPIT1Callback(void)
    }
 
    DSPSetIRQLine(DSPIRQ_TIMER0, ASSERT_LINE);	// This does the 'IRQ enabled' checking...
-   JERRYResetPIT1();
+   JERRYResetPIT1(UNKNOWN);
 }
 
 
@@ -304,7 +304,7 @@ void JERRYPIT2Callback(void)
    }
 
    DSPSetIRQLine(DSPIRQ_TIMER1, ASSERT_LINE);	// This does the 'IRQ enabled' checking...
-   JERRYResetPIT2();
+   JERRYResetPIT2(UNKNOWN);
 }
 
 
@@ -316,7 +316,7 @@ void JERRYPIT2Callback(void)
  * JERRYResetPIT1/2 schedule from the same origin, so a restart inside a
  * slice reads back a full period.
  * A stopped timer reads back its programmed values. */
-static uint16_t JERRYReadPIT(uint32_t offset)
+static uint16_t JERRYReadPIT(uint32_t offset, uint32_t who)
 {
    int timer2       = (offset & 0xFFFFFFFE) >= 0xF1003A;
    int divider      = !(offset & 0x02);    /* $38, $3C */
@@ -331,7 +331,7 @@ static uint16_t JERRYReadPIT(uint32_t offset)
    if (left < 0.0)
       return (uint16_t)(divider ? div : pre);
 
-   left -= JaguarSliceElapsedUs();
+   left -= JaguarSliceElapsedUs(who);
    clocks = left > 0.0 ? (uint64_t)(left / tick + 0.5) : 0;
    if (clocks < 1)
       clocks = 1;
@@ -535,7 +535,7 @@ uint8_t JERRYReadByte(uint32_t offset, uint32_t who/*=UNKNOWN*/)
    //	F1003C          R     xxxxxxxx xxxxxxxx   JPIT4 - timer 2 divider
    else if ((offset >= 0xF10036) && (offset <= 0xF1003D))
    {
-      uint16_t value = JERRYReadPIT(offset);
+      uint16_t value = JERRYReadPIT(offset, who);
 
       return (offset & 0x01) ? (value & 0xFF) : (value >> 8);
    }
@@ -593,7 +593,7 @@ uint16_t JERRYReadWord(uint32_t offset, uint32_t who/*=UNKNOWN*/)
    //	F1003C          R     xxxxxxxx xxxxxxxx   JPIT4 - timer 2 divider
    else if ((offset >= 0xF10036) && (offset <= 0xF1003D))
    {
-      return JERRYReadPIT(offset);
+      return JERRYReadPIT(offset, who);
    }
    else if (offset == 0xF10020)
    {
@@ -761,19 +761,19 @@ void JERRYWriteWord(uint32_t offset, uint16_t data, uint32_t who/*=UNKNOWN*/)
       {
          case 0:
             JERRYPIT1Prescaler = data;
-            JERRYResetPIT1();
+            JERRYResetPIT1(who);
             break;
          case 2:
             JERRYPIT1Divider = data;
-            JERRYResetPIT1();
+            JERRYResetPIT1(who);
             break;
          case 4:
             JERRYPIT2Prescaler = data;
-            JERRYResetPIT2();
+            JERRYResetPIT2(who);
             break;
          case 6:
             JERRYPIT2Divider = data;
-            JERRYResetPIT2();
+            JERRYResetPIT2(who);
       }
       // Need to handle (unaligned) cases???
 

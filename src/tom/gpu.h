@@ -26,6 +26,7 @@ void GPUExec(int32_t);
  * GPU to the 68000's position when the two processors communicate. */
 void GPUBeginSlice(uint32_t riscCycles);
 int32_t GPUSliceRemaining(void);
+double GPUSliceElapsedUs(void);
 void GPUSyncToM68K(void);
 void GPUUpdateRegisterBanks(void);
 /* Add wall-time system clocks to the current GPU instruction's bus
