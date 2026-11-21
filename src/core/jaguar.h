@@ -111,7 +111,7 @@ void HalflineCallback(void);
  * 0 between slices.  Event times are only rebased at slice end, so this
  * plus a GetCallbackTime() remainder places a bus access inside the
  * slice -- what a free-running counter such as HC needs. */
-double JaguarSliceElapsedUs(void);
+double JaguarSliceElapsedUs(uint32_t who);
 
 /* Clock-scale enhancement levers (issue #314), in percent of the stock
  * rate (100 = stock).  Config, not state: set from the core options in

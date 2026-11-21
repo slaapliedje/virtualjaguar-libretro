@@ -1863,6 +1863,22 @@ int32_t GPUSliceRemaining(void)
    return (left > 0 ? left : 0);
 }
 
+/* How far the GPU has got into the current slice, for a counter read
+ * (HC, PIT) made by the GPU itself.  Negative when it is not running.
+ * gpuExecSliceBudget/Remaining are the running GPUExec()'s budget and
+ * what is left of it at the current instruction (see their comment). */
+double GPUSliceElapsedUs(void)
+{
+   double tick = vjs.hardwareTypeNTSC ? RISC_CYCLE_IN_USEC : RISC_CYCLE_PAL_IN_USEC;
+   int32_t ran;
+
+   if (!gpu_in_exec)
+      return -1.0;
+   ran = gpuSliceSpent + (gpuExecSliceBudget - gpuExecSliceRemaining);
+   /* Executed cycles are scaled cycles; wall time is unscaled. */
+   return (double)ran * 100.0 / (double)riscClockScalePct * tick;
+}
+
 /* Advance the GPU to the 68000's position inside the current slice.  Called
  * once per 68000 write access into GPU local RAM, BEFORE the write lands (see
  * M68KGPURAMSync in jaguar.c for why not after -- Myst, issue #756).
@@ -1902,10 +1918,11 @@ void GPUSyncToM68K(void)
    /* Bracketed here, not around GPUExec's body: this measures the GPU time
     * a 68K bus access pulled in, which is the term that makes vj_m68k_slice
     * interpretable (perf_iface.h).  It NESTS inside vj_gpu_exec on purpose. */
-   gpuSliceSpent += run;
    VJP_ENTER(VJP_GPU_SYNC);
    GPUExec(run);
    VJP_LEAVE(VJP_GPU_SYNC);
+   /* Counted after the run so GPUSliceElapsedUs() sees where it began. */
+   gpuSliceSpent += run;
 }
 
 /* ==================================================================

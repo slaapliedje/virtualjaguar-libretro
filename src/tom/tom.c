@@ -2111,10 +2111,10 @@ void TOMPITCallback(void);
  * The count is the elapsed fraction of the current half-line: the time to
  * the next half-line event at slice start, less how far into the slice
  * the reading processor has got (JaguarSliceElapsedUs), scaled to HP+1
- * ticks.  The 68K is placed to the cycle; a GPU/DSP read is placed only
- * to the slice resolution its scheduling has.  Derived purely from serialized
- * event time, so savestates and run-ahead see the same value. */
-static uint16_t TOMReadHC(void)
+ * ticks.  Each processor is placed at its own position in the slice.
+ * Derived from serialized event time and the cycles the reader has run,
+ * so savestates and run-ahead see the same value. */
+static uint16_t TOMReadHC(uint32_t who)
 {
    uint16_t hc     = GET16(tomRam8, HC);
    uint32_t ticks  = (uint32_t)(GET16(tomRam8, HP) & 0x03FF) + 1;
@@ -2126,7 +2126,7 @@ static uint16_t TOMReadHC(void)
    if (left < 0.0)
       return hc;
 
-   elapsed = period - (left - JaguarSliceElapsedUs());
+   elapsed = period - (left - JaguarSliceElapsedUs(who));
    if (elapsed < 0.0)
       elapsed = 0.0;
    count = (uint32_t)(elapsed * (double)ticks / period);
@@ -2189,9 +2189,9 @@ uint8_t TOMReadByte(uint32_t offset, uint32_t who)
    else if (offset == 0xF00053)
       return TOMReadPIT(1) & 0xFF;
    else if (offset == 0xF00004)
-      return TOMReadHC() >> 8;
+      return TOMReadHC(who) >> 8;
    else if (offset == 0xF00005)
-      return TOMReadHC() & 0xFF;
+      return TOMReadHC(who) & 0xFF;
    else if (offset == 0xF000E0)
       return 0;
    else if (offset == 0xF000E1)
@@ -2215,7 +2215,7 @@ uint16_t TOMReadWord(uint32_t offset, uint32_t who)
       return data;
    }
    else if (offset == 0xF00004)
-      return TOMReadHC();
+      return TOMReadHC(who);
    else if ((offset >= GPU_CONTROL_RAM_BASE) && (offset < GPU_CONTROL_RAM_BASE + 0x20))
       return GPUReadWord(offset, who);
    else if ((offset >= GPU_WORK_RAM_BASE) && (offset < GPU_WORK_RAM_BASE + 0x1000))

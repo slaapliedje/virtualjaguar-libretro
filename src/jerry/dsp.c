@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "dac.h"
+#include "event.h"
 #include "gpu.h"
 #include "jaguar.h"
 #include "jerry.h"
@@ -435,6 +436,10 @@ static uint32_t dspgo_poll_count;
 static uint32_t dsp_in_exec = 0;
 static int32_t dspSliceBudget;
 static int32_t dspSliceSpent;
+/* Budget handed to the running DSPExec() and what it has left at the
+ * current instruction, for DSPSliceElapsedUs(). */
+static int32_t dspExecBudget;
+static int32_t dspExecRemaining;
 static uint32_t dsp_releaseTimeSlice_flag = 0;
 /* DSP execution liveness counter for the crash watchdog's wedge
  * predicate -- see gpu.c gpu_exec_opcode_count for rationale and the
@@ -1734,6 +1739,20 @@ int32_t DSPSliceRemaining(void)
 	return (left > 0 ? left : 0);
 }
 
+/* How far the DSP has got into the current slice, for a counter read
+ * (HC, PIT) made by the DSP itself.  Negative when it is not running. */
+double DSPSliceElapsedUs(void)
+{
+	double tick = vjs.hardwareTypeNTSC ? RISC_CYCLE_IN_USEC : RISC_CYCLE_PAL_IN_USEC;
+	int32_t ran;
+
+	if (!dsp_in_exec)
+		return -1.0;
+	ran = dspSliceSpent + (dspExecBudget - dspExecRemaining);
+	/* Executed cycles are scaled cycles; wall time is unscaled. */
+	return (double)ran * 100.0 / (double)riscClockScalePct * tick;
+}
+
 /* Advance the DSP to the 68000's position inside the current slice.
  * Mirror of GPUSyncToM68K (issue #406 / PR #445): without this a 68K
  * poll of a DSP mailbox samples stale state from the previous slice,
@@ -1755,10 +1774,11 @@ void DSPSyncToM68K(void)
 		return;
 
 	/* Mirror of GPUSyncToM68K's probe -- see perf_iface.h. */
-	dspSliceSpent += run;
 	VJP_ENTER(VJP_DSP_SYNC);
 	DSPExec(run);
 	VJP_LEAVE(VJP_DSP_SYNC);
+	/* Counted after the run so DSPSliceElapsedUs() sees where it began. */
+	dspSliceSpent += run;
 }
 
 /* ==================================================================
@@ -4957,6 +4977,7 @@ static DSP_NOINLINE void DSPExecTimed(int32_t cycles)
 	dsp_releaseTimeSlice_flag = 0;
 	gdbArmedSlice = gdbArmedDSP;
 	dsp_in_exec++;
+	dspExecBudget = dspExecRemaining = cycles;
 	/* Model hook: latch the timing mode for this slice. */
 	dsp_mem_timed = vjs.gpuPipelineTiming ? 2 : 1;
 	pipeTiming = (dsp_mem_timed == 2);
@@ -4979,6 +5000,7 @@ static DSP_NOINLINE void DSPExecTimed(int32_t cycles)
 #ifdef VJ_TRACE
 		VJT_PCHIST_DSP(dsp_pc);
 #endif
+		dspExecRemaining = cycles;
 
 		if (IMASKCleared && dspFlagsRetireDelay == 0)
 		{

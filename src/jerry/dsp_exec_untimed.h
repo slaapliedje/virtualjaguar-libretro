@@ -49,6 +49,7 @@ static DSP_NOINLINE void DSP_UNTIMED_NAME(int32_t cycles)
 	gdbArmedSlice = gdbArmedDSP;
 #endif
 	dsp_in_exec++;
+	dspExecBudget = dspExecRemaining = cycles;
 
 	/* Idle-loop fast-forward gates (issue #569).  Every one of these adds
 	 * per-instruction state the affine extrapolation does not model, so
@@ -132,6 +133,7 @@ static DSP_NOINLINE void DSP_UNTIMED_NAME(int32_t cycles)
 #ifdef VJ_TRACE
       VJT_PCHIST_DSP(dsp_pc);
 #endif
+      dspExecRemaining = cycles;
 
 		/* If IMASK was cleared, see if any other interrupts are pending --
 		 * but not until the D_FLAGS store that cleared it has retired, so

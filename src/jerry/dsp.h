@@ -26,6 +26,7 @@ void DSPSetIRQLine(int irqline, int state);
  * GPUBeginSlice / GPUSliceRemaining / GPUSyncToM68K (issue #456). */
 void DSPBeginSlice(uint32_t riscCycles);
 int32_t DSPSliceRemaining(void);
+double DSPSliceElapsedUs(void);
 void DSPSyncToM68K(void);
 /* Zero the DSP pipeline/gateway timing model's transient state (option
  * toggle, reset; mirror of GPUPipeTimingReset). */

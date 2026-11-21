@@ -1726,11 +1726,22 @@ static uint32_t m68kSliceStall  = 0;	/* 68K cycles stalled before executing */
 static uint32_t m68kSliceBudget = 0;	/* cycles handed to m68k_execute() */
 static double   sliceDoneUs     = 0.0;
 
-double JaguarSliceElapsedUs(void)
+double JaguarSliceElapsedUs(uint32_t who)
 {
    double cycleUs = vjs.hardwareTypeNTSC ? M68K_CYCLE_IN_USEC
                                          : M68K_CYCLE_PAL_IN_USEC;
    int run;
+
+   /* A GPU or DSP read is placed at that processor's own position in
+    * the slice -- in its main-loop run, or one pulled ahead by a 68K
+    * access (GPU/DSPSyncToM68K).  Between slices (event callbacks, the
+    * OP's inline GPU run) there is no slice to be inside. */
+   if ((who == GPU || who == DSP) && (m68kSliceActive || sliceDoneUs > 0.0))
+   {
+      double us = (who == GPU) ? GPUSliceElapsedUs() : DSPSliceElapsedUs();
+      if (us >= 0.0)
+         return us;
+   }
 
    if (!m68kSliceActive)
       return sliceDoneUs;
