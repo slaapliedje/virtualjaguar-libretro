@@ -3673,9 +3673,12 @@ static void check_variables(void)
    var.key = "virtualjaguar_dram_timing";
    var.value = NULL;
    if (get_variable_pertitle(&var) && var.value)
-      busArbiter.enabled = (strcmp(var.value, "enabled") == 0);
+      busArbiter.enabled = (strcmp(var.value, "enabled") == 0
+                            || strcmp(var.value, "measured") == 0);
    else
       busArbiter.enabled = 0;
+   bus_arbiter_set_measured(busArbiter.enabled && var.value
+                            && strcmp(var.value, "measured") == 0);
    /* No charging happens while disabled, so a carry left over from a
     * runtime toggle (or an older savestate) must not leak into the
     * first charged access when the option is re-enabled.  The

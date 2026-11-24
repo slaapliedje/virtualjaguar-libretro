@@ -350,12 +350,13 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "virtualjaguar_dram_timing",
       "DRAM Timing (Experimental)",
       NULL,
-      "Charge the GPU and 68000 realistic DRAM access time once they leave their local buses, pacing hardware-timed games (Doom-class) closer to real hardware. Each processor pays only its own costs, so relative CPU/GPU timing is preserved. Still being calibrated. Switches off DSP Idle-Loop Fast-Forward while enabled.",
+      "Charge the GPU and 68000 realistic DRAM access time once they leave their local buses, pacing hardware-timed games (Doom-class) closer to real hardware. Each processor pays only its own costs, so relative CPU/GPU timing is preserved. Still being calibrated. 'Measured' uses 68000 bus and Object Processor costs fitted to a real NTSC Jaguar (jaguar-hw-probe). Switches off DSP Idle-Loop Fast-Forward while enabled.",
       NULL,
       "accuracy",
       {
          { "disabled", NULL },
          { "enabled",  NULL },
+         { "measured", "Measured (real Jaguar)" },
          { NULL, NULL },
       },
       "disabled"

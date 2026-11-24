@@ -8,6 +8,7 @@
 
 #include "bus_arbiter.h"
 #include <string.h>
+#include <stdlib.h>
 
 struct BusArbiter busArbiter;
 
@@ -49,6 +50,13 @@ static const uint8_t dram_refresh_table[4] = { 5, 4, 4, 3 };
  * only the excess of an access over this. */
 #define M68K_BUS_CYCLE_SYSCLKS 8
 
+/* measured mode defaults (bus_arbiter.h): fitted to jaguar-hw-probe v2 on
+ * an NTSC Jaguar, see bus_arbiter_set_measured(). */
+#define MEASURED_M68K_OVERHEAD_X100 930
+#define MEASURED_OP_SCALE_PCT       210
+#define MEASURED_BLIT_W_X100        208
+#define MEASURED_BLIT_RW_X100       547
+
 void bus_arbiter_init(void)
 {
     memset(&busArbiter, 0, sizeof(busArbiter));
@@ -64,6 +72,31 @@ void bus_arbiter_init(void)
      * the virtualjaguar_dram_timing core option is set. */
     busArbiter.enabled = 0;
     busArbiter.contention_scale = 1;
+}
+
+void bus_arbiter_set_measured(int on)
+{
+    const char *e;
+
+    busArbiter.measured = on ? 1 : 0;
+    busArbiter.m68k_overhead_x100 = MEASURED_M68K_OVERHEAD_X100;
+    busArbiter.op_scale_pct = MEASURED_OP_SCALE_PCT;
+    busArbiter.blit_w_x100 = MEASURED_BLIT_W_X100;
+    busArbiter.blit_rw_x100 = MEASURED_BLIT_RW_X100;
+    if (!on)
+        return;
+    e = getenv("VJ_BLIT_W");
+    if (e && e[0])
+        busArbiter.blit_w_x100 = (uint16_t)atoi(e);
+    e = getenv("VJ_BLIT_RW");
+    if (e && e[0])
+        busArbiter.blit_rw_x100 = (uint16_t)atoi(e);
+    e = getenv("VJ_M68K_OVERHEAD");
+    if (e && e[0])
+        busArbiter.m68k_overhead_x100 = (uint16_t)atoi(e);
+    e = getenv("VJ_OP_SCALE");
+    if (e && e[0])
+        busArbiter.op_scale_pct = (uint16_t)atoi(e);
 }
 
 void bus_arbiter_update_memcon(uint16_t memcon1)
@@ -141,6 +174,21 @@ uint32_t bus_arbiter_m68k_access(uint32_t addr, uint32_t naccesses,
     per_access = bus_arbiter_dram_cost(addr);
     if (per_access == 0)
         per_access = IO_BUS_CLOCKS_ESTIMATE;   /* GPU/DSP local RAM: I/O bus for the 68K */
+
+    if (busArbiter.measured)
+    {
+        /* Memory time plus TOM's handshake, in sysclk-hundredths; the
+         * part beyond the 68K's own bus cycle is wait states. */
+        uint32_t x100 = per_access * 100u + busArbiter.m68k_overhead_x100;
+        if (x100 <= M68K_BUS_CYCLE_SYSCLKS * 100u)
+            return 0;
+        x100 = (x100 - M68K_BUS_CYCLE_SYSCLKS * 100u) * naccesses;
+        /* carry is in sysclk x scale_pct units (see below) */
+        busArbiter.m68k_sysclk_carry += x100 * scale_pct / 100u;
+        cycles = busArbiter.m68k_sysclk_carry / 200u;
+        busArbiter.m68k_sysclk_carry %= 200u;
+        return cycles;
+    }
 
     /* Charge only the WAIT STATES, not the whole access.
      *
@@ -245,6 +293,8 @@ uint32_t bus_arbiter_op_take(void)
     uint32_t clks;
     clks = busArbiter.op_clk_accum;
     busArbiter.op_clk_accum = 0;
+    if (busArbiter.measured)
+        clks = clks * busArbiter.op_scale_pct / 100u;
     if (busArbiter.contention_scale > 1)
         clks *= busArbiter.contention_scale;
     return clks;

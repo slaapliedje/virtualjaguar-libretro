@@ -112,6 +112,31 @@ struct BusArbiter {
     /* Feature toggle (from core option). */
     uint8_t enabled;
 
+    /* "measured" mode (DRAM Timing = measured): costs calibrated against
+     * a real NTSC Jaguar with the jaguar-hw-probe cart rather than derived
+     * from the JTRM tables.  On hardware every 68K bus cycle goes through
+     * TOM's arbitration and DTACK synchronisation, so it costs the memory
+     * time PLUS a fixed handshake overhead, not max(memory time, 8): a
+     * 68K loop running from DRAM measures ~1.48x its datasheet cycles.
+     * Set from the option, NOT serialized. */
+    uint8_t measured;
+
+    /* measured mode: TOM's handshake overhead per 68K bus cycle, in
+     * hundredths of a system clock, added to the memory time
+     * (bus_arbiter_dram_cost()); anything above the 68K's own 8-sysclk
+     * bus cycle is charged as wait states.  NOT serialized. */
+    uint16_t m68k_overhead_x100;
+
+    /* measured mode: OP bus occupancy charged to the 68K, in percent of
+     * the model's phrase/row-change clocks.  NOT serialized. */
+    uint16_t op_scale_pct;
+
+    /* measured mode: blitter memory-op cost in sysclk-hundredths, for a
+     * write-only sweep and for one with a second port enabled.  NOT
+     * serialized. */
+    uint16_t blit_w_x100;
+    uint16_t blit_rw_x100;
+
     /* Calibration multiplier applied to charged cycles.  NOT a user
      * option: settable only via the VJ_DRAM_SCALE env var while the
      * correct physical cost (OP occupancy, load latency, master
@@ -148,6 +173,12 @@ struct BusArbiter {
 extern struct BusArbiter busArbiter;
 
 void bus_arbiter_init(void);
+
+/* Switch measured mode on or off: loads the calibrated constants, which
+ * the VJ_M68K_OVERHEAD (hundredths of a sysclk), VJ_OP_SCALE (percent),
+ * VJ_BLIT_W and VJ_BLIT_RW (hundredths of a sysclk per blitter memory op)
+ * environment variables override for calibration runs. */
+void bus_arbiter_set_measured(int on);
 
 /* Called when MEMCON1 is written to recompute DRAM timing. */
 void bus_arbiter_update_memcon(uint16_t memcon1);

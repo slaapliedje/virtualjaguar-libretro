@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "bus_arbiter.h"
+#include "../m68000/cpudefs.h"   /* regs.remainingCycles: measured-mode blit stall */
 #include "gpu.h"
 #include "../core/log.h"
 #include "../core/crash_detect.h"
@@ -109,6 +110,9 @@ static uint32_t BlitDurationSysclks(void)
    per_op = (ops > 1) ? 5u : 2u;
 
    clks = units * ops * per_op;
+   if (busArbiter.measured)
+      clks = units * ops * ((ops > 1) ? busArbiter.blit_rw_x100
+                                      : busArbiter.blit_w_x100) / 100u;
 
    /* Garbage counts (uninitialised B_COUNT) must not freeze a master
     * for seconds: cap at two fields' worth of bus time (a real
@@ -703,6 +707,32 @@ void BlitterWriteWord(uint32_t offset, uint16_t data, uint32_t who/*=UNKNOWN*/)
        * walks away pays nothing further. */
       if (who != GPU || vjs.blitterTimingGpu)
          blitterBusyClks = busClks;
+
+      /* Measured mode: the blitter owns the bus while it runs and the
+       * 68000 has no cache, so on hardware the 68K simply stops until
+       * the blit is done -- whoever started it.  A 68K-started blit is
+       * paid at once, out of the slice the B_CMD write happened in (so
+       * a timer read right after the blit sees the time), the rest from
+       * the following slices; a GPU-started one stalls the 68K from its
+       * next slice.  Either way the window is spent: polling B_CMD
+       * afterwards finds the blitter idle. */
+      if (busArbiter.measured && busClks)
+      {
+         if (who == M68K)
+         {
+            int32_t cyc = (int32_t)(busClks >> 1);
+            int32_t take = regs.remainingCycles > 0 ? regs.remainingCycles : 0;
+            if (take > cyc)
+               take = cyc;
+            regs.remainingCycles -= take;
+            busArbiter.m68k_pending_stall += (uint32_t)(cyc - take) << 1;
+            blitterBusyClks = 0;
+         }
+         else
+            busArbiter.m68k_pending_stall += busClks;
+         if (busArbiter.m68k_pending_stall > 442780u)
+            busArbiter.m68k_pending_stall = 442780u;
+      }
    }
 }
 
