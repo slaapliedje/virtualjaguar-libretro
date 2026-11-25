@@ -137,6 +137,30 @@ struct BusArbiter {
     uint16_t blit_w_x100;
     uint16_t blit_rw_x100;
 
+    /* measured mode, jaguar-hw-probe timing cart (jagwrestle timetest):
+     * wait per 68K bus cycle to ROM or DRAM by kind -- instruction fetch,
+     * data read, data write -- in sysclk-hundredths beyond the 68K's own
+     * 8-sysclk cycle (code timed the same from ROM and from DRAM on
+     * hardware, so the memory type doesn't enter), and the 68K bus time
+     * each GPU/DSP access to ROM or DRAM takes from the 68K.  m68k_kind
+     * is the kind of the access being charged (BUS_K_*).  NOT
+     * serialized. */
+    uint16_t w_fetch_x100;
+    uint16_t w_read_x100;
+    uint16_t w_write_x100;
+    uint16_t risc_x100;
+    uint16_t risc_cap;                   /* of that, at most this many sysclks a halfline */
+    /* measured mode, blitter by port (timing cart: fill, copy, and a
+     * DSTEN transparent sprite cost ~2.6, ~6 and ~18 sysclks a phrase):
+     * sysclk-hundredths per unit for a source read and a destination
+     * read, on top of blit_w_x100 for the write.  gpu_pct scales the
+     * GPU's own ROM/DRAM access cost.  NOT serialized. */
+    uint16_t blit_rs_x100;
+    uint16_t blit_rd_x100;
+    uint16_t gpu_pct;
+    uint32_t risc_accum_x100;
+    uint8_t m68k_kind;
+
     /* Calibration multiplier applied to charged cycles.  NOT a user
      * option: settable only via the VJ_DRAM_SCALE env var while the
      * correct physical cost (OP occupancy, load latency, master
@@ -171,6 +195,8 @@ struct BusArbiter {
 };
 
 extern struct BusArbiter busArbiter;
+
+enum { BUS_K_READ, BUS_K_FETCH, BUS_K_WRITE };
 
 void bus_arbiter_init(void);
 

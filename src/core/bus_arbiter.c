@@ -50,12 +50,22 @@ static const uint8_t dram_refresh_table[4] = { 5, 4, 4, 3 };
  * only the excess of an access over this. */
 #define M68K_BUS_CYCLE_SYSCLKS 8
 
-/* measured mode defaults (bus_arbiter.h): fitted to jaguar-hw-probe v2 on
- * an NTSC Jaguar, see bus_arbiter_set_measured(). */
+/* measured mode defaults (bus_arbiter.h): fitted to jaguar-hw-probe v2 and
+ * the jagwrestle timing cart (2026-11-24) on an NTSC Jaguar, see
+ * bus_arbiter_set_measured(). A jagwrestle 4-man rumble then runs 25 fps
+ * median / 29.6 mean against hardware's 25 / 30.6. */
 #define MEASURED_M68K_OVERHEAD_X100 930
-#define MEASURED_OP_SCALE_PCT       210
-#define MEASURED_BLIT_W_X100        208
+#define MEASURED_OP_SCALE_PCT       484
+#define MEASURED_BLIT_W_X100        191
 #define MEASURED_BLIT_RW_X100       547
+#define MEASURED_W_FETCH_X100       117
+#define MEASURED_W_READ_X100        743
+#define MEASURED_W_WRITE_X100       1057
+#define MEASURED_RISC_X100          1300
+#define MEASURED_RISC_CAP           620
+#define MEASURED_BLIT_RS_X100       245
+#define MEASURED_BLIT_RD_X100       767
+#define MEASURED_GPU_PCT            322
 
 void bus_arbiter_init(void)
 {
@@ -83,8 +93,41 @@ void bus_arbiter_set_measured(int on)
     busArbiter.op_scale_pct = MEASURED_OP_SCALE_PCT;
     busArbiter.blit_w_x100 = MEASURED_BLIT_W_X100;
     busArbiter.blit_rw_x100 = MEASURED_BLIT_RW_X100;
+    busArbiter.w_fetch_x100 = MEASURED_W_FETCH_X100;
+    busArbiter.w_read_x100 = MEASURED_W_READ_X100;
+    busArbiter.w_write_x100 = MEASURED_W_WRITE_X100;
+    busArbiter.risc_x100 = MEASURED_RISC_X100;
+    busArbiter.risc_cap = MEASURED_RISC_CAP;
+    busArbiter.blit_rs_x100 = MEASURED_BLIT_RS_X100;
+    busArbiter.blit_rd_x100 = MEASURED_BLIT_RD_X100;
+    busArbiter.gpu_pct = MEASURED_GPU_PCT;
+    busArbiter.risc_accum_x100 = 0;
     if (!on)
         return;
+    e = getenv("VJ_W_FETCH");
+    if (e && e[0])
+        busArbiter.w_fetch_x100 = (uint16_t)atoi(e);
+    e = getenv("VJ_W_READ");
+    if (e && e[0])
+        busArbiter.w_read_x100 = (uint16_t)atoi(e);
+    e = getenv("VJ_W_WRITE");
+    if (e && e[0])
+        busArbiter.w_write_x100 = (uint16_t)atoi(e);
+    e = getenv("VJ_BLIT_RS");
+    if (e && e[0])
+        busArbiter.blit_rs_x100 = (uint16_t)atoi(e);
+    e = getenv("VJ_BLIT_RD");
+    if (e && e[0])
+        busArbiter.blit_rd_x100 = (uint16_t)atoi(e);
+    e = getenv("VJ_GPU_PCT");
+    if (e && e[0])
+        busArbiter.gpu_pct = (uint16_t)atoi(e);
+    e = getenv("VJ_RISC_CAP");
+    if (e && e[0])
+        busArbiter.risc_cap = (uint16_t)atoi(e);
+    e = getenv("VJ_RISC_68K");
+    if (e && e[0])
+        busArbiter.risc_x100 = (uint16_t)atoi(e);
     e = getenv("VJ_BLIT_W");
     if (e && e[0])
         busArbiter.blit_w_x100 = (uint16_t)atoi(e);
@@ -163,6 +206,11 @@ uint32_t bus_arbiter_charge_access(int master, uint32_t addr)
     }
     if (busArbiter.contention_scale > 1)
         cost *= busArbiter.contention_scale;
+    if (busArbiter.measured && master == BM_GPU)
+        cost = (cost * busArbiter.gpu_pct + 50u) / 100u;
+    if (busArbiter.measured && master != BM_CPU && (addr & 0xFFFFFF) < 0xE00000
+        && ((addr & 0xFFFFFF) < 0x200000 || (addr & 0xFFFFFF) >= 0x800000))
+        busArbiter.risc_accum_x100 += busArbiter.risc_x100;
     return cost;
 }
 
@@ -177,12 +225,22 @@ uint32_t bus_arbiter_m68k_access(uint32_t addr, uint32_t naccesses,
 
     if (busArbiter.measured)
     {
-        /* Memory time plus TOM's handshake, in sysclk-hundredths; the
-         * part beyond the 68K's own bus cycle is wait states. */
-        uint32_t x100 = per_access * 100u + busArbiter.m68k_overhead_x100;
-        if (x100 <= M68K_BUS_CYCLE_SYSCLKS * 100u)
-            return 0;
-        x100 = (x100 - M68K_BUS_CYCLE_SYSCLKS * 100u) * naccesses;
+        /* ROM and DRAM: a wait by access kind (timing cart); the I/O
+         * bus: memory time plus TOM's handshake, in sysclk-hundredths,
+         * the part beyond the 68K's own bus cycle being wait states. */
+        uint32_t x100;
+        if (addr < 0xF00000)
+            x100 = busArbiter.m68k_kind == BUS_K_FETCH ? busArbiter.w_fetch_x100
+                 : busArbiter.m68k_kind == BUS_K_WRITE ? busArbiter.w_write_x100
+                 : busArbiter.w_read_x100;
+        else
+        {
+            x100 = per_access * 100u + busArbiter.m68k_overhead_x100;
+            if (x100 <= M68K_BUS_CYCLE_SYSCLKS * 100u)
+                return 0;
+            x100 -= M68K_BUS_CYCLE_SYSCLKS * 100u;
+        }
+        x100 *= naccesses;
         /* carry is in sysclk x scale_pct units (see below) */
         busArbiter.m68k_sysclk_carry += x100 * scale_pct / 100u;
         cycles = busArbiter.m68k_sysclk_carry / 200u;
@@ -259,6 +317,9 @@ uint32_t bus_arbiter_dsp_access(uint32_t addr, int is_long)
     first = bus_arbiter_dram_cost(addr);
     if (first == 0)
         first = IO_BUS_CLOCKS_ESTIMATE;   /* GPU local RAM: TOM I/O for JERRY */
+    if (busArbiter.measured && addr < 0xE00000
+        && (addr < 0x200000 || addr >= 0x800000))
+        busArbiter.risc_accum_x100 += busArbiter.risc_x100 * (is_long ? 2u : 1u);
     cost = first;
     if (is_long)
     {
@@ -294,7 +355,18 @@ uint32_t bus_arbiter_op_take(void)
     clks = busArbiter.op_clk_accum;
     busArbiter.op_clk_accum = 0;
     if (busArbiter.measured)
+    {
         clks = clks * busArbiter.op_scale_pct / 100u;
+        /* GPU/DSP bus traffic since the last halfline (timing cart) */
+        /* GPU/DSP bus traffic since the last halfline: on hardware a
+         * RISC loading back to back still leaves the 68K about a
+         * quarter of the bus (timing cart), so at most risc_cap */
+        {
+            uint32_t r = busArbiter.risc_accum_x100 / 100u;
+            clks += r < busArbiter.risc_cap ? r : busArbiter.risc_cap;
+            busArbiter.risc_accum_x100 = 0;
+        }
+    }
     if (busArbiter.contention_scale > 1)
         clks *= busArbiter.contention_scale;
     return clks;

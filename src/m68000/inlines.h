@@ -81,9 +81,13 @@ static INLINE void m68k_do_jsr(uint32_t oldpc, uint32_t dest)
 
 // For now, we'll punt this crap...
 // (Also, notice that the byte read is at address + 1...)
-#define get_ibyte(o)	m68k_read_memory_8(regs.pc + (o) + 1)
-#define get_iword(o)	m68k_read_memory_16(regs.pc + (o))
-#define get_ilong(o)	m68k_read_memory_32(regs.pc + (o))
+/* instruction stream: charged as fetches by the measured bus model */
+unsigned int m68k_fetch_8(unsigned int address);
+unsigned int m68k_fetch_16(unsigned int address);
+unsigned int m68k_fetch_32(unsigned int address);
+#define get_ibyte(o)	m68k_fetch_8(regs.pc + (o) + 1)
+#define get_iword(o)	m68k_fetch_16(regs.pc + (o))
+#define get_ilong(o)	m68k_fetch_32(regs.pc + (o))
 
 // We don't use this crap, so let's comment out for now...
 static INLINE void refill_prefetch(uint32_t currpc, uint32_t offs)

@@ -111,8 +111,12 @@ static uint32_t BlitDurationSysclks(void)
 
    clks = units * ops * per_op;
    if (busArbiter.measured)
-      clks = units * ops * ((ops > 1) ? busArbiter.blit_rw_x100
-                                      : busArbiter.blit_w_x100) / 100u;
+      clks = units * (busArbiter.blit_w_x100
+                      + ((cmd & 0x0001) ? busArbiter.blit_rs_x100 : 0u)
+                      + ((cmd & 0x0002) ? busArbiter.blit_rs_x100 : 0u)
+                      + ((cmd & 0x0008) ? busArbiter.blit_rd_x100 : 0u)
+                      + ((cmd & 0x0010) ? busArbiter.blit_rd_x100 : 0u)
+                      + ((cmd & 0x0020) ? busArbiter.blit_w_x100 : 0u)) / 100u;
 
    /* Garbage counts (uninitialised B_COUNT) must not freeze a master
     * for seconds: cap at two fields' worth of bus time (a real

@@ -490,6 +490,13 @@ int irq_ack_handler(int level)
  * cycles. */
 static int m68kBusNoCharge = 0;
 
+#define M68K_BUS_CHARGE_W(addr, naccesses) \
+   do { \
+      busArbiter.m68k_kind = BUS_K_WRITE; \
+      M68K_BUS_CHARGE((addr), (naccesses)); \
+      busArbiter.m68k_kind = BUS_K_READ; \
+   } while (0)
+
 #define M68K_BUS_CHARGE(addr, naccesses) \
    do { \
       if (busArbiter.enabled && !m68kBusNoCharge) \
@@ -839,7 +846,7 @@ void m68k_write_memory_8(unsigned int address, unsigned int value)
     * JaguarWriteByte's uint8_t parameter, so mask here to match its
     * record shape.  Emitted after the sync so a trace orders the GPU/DSP
     * events of the catch-up before the write they precede. */
-   M68K_BUS_CHARGE(address, 1);
+   M68K_BUS_CHARGE_W(address, 1);
    M68KGPURAMSync(address, 1);
    VJT_WATCH_WR(address, value & 0xFFu, M68K);
 
@@ -892,7 +899,7 @@ void m68k_write_memory_16(unsigned int address, unsigned int value)
     * GPU/DSP RISC-local latch below and not memory yet.  Masked to 16
     * bits to match JaguarWriteWord's record shape -- see the mask note
     * in m68k_write_memory_8, and for why it follows the sync. */
-   M68K_BUS_CHARGE(address, 1);
+   M68K_BUS_CHARGE_W(address, 1);
    /* Before the write, not after: the latch-only half occupies the bus
     * like a committing write, and either way the GPU must not observe
     * the new value in cycles that precede it (see M68KGPURAMSync). */
@@ -964,7 +971,7 @@ void m68k_write_memory_32(unsigned int address, unsigned int value)
        * 32-bit access and `unsigned int` is exactly 32 bits, so
        * `value` already matches JaguarWriteLong's record shape. */
       VJT_WATCH_WR(address, value, M68K);
-      M68K_BUS_CHARGE(address, 2);
+      M68K_BUS_CHARGE_W(address, 2);
       if (M68K_PF_NEAR(address, 4))
          M68KPrefetchSnoop(address, 4);   /* self-modifying code, #811 */
       if (blitMemoMode)
@@ -975,8 +982,8 @@ void m68k_write_memory_32(unsigned int address, unsigned int value)
    /* Charge both bus cycles up front so the catch-up covers the whole long
     * access, as it does for the 8/16-bit paths (charge, then sync, then
     * write); the halves below then run uncharged to avoid billing twice. */
-   M68K_BUS_CHARGE(address, 1);
-   M68K_BUS_CHARGE((address + 2) & 0x00FFFFFF, 1);
+   M68K_BUS_CHARGE_W(address, 1);
+   M68K_BUS_CHARGE_W((address + 2) & 0x00FFFFFF, 1);
    M68KGPURAMSync(address, 4);
    m68kInLongWrite++;
    m68kBusNoCharge++;
@@ -987,6 +994,34 @@ void m68k_write_memory_32(unsigned int address, unsigned int value)
 }
 
 /* Disassemble M68K instructions at the given offset */
+
+/* instruction fetches (inlines.h get_i*): reads charged as fetches */
+unsigned int m68k_fetch_8(unsigned int address)
+{
+   unsigned int v;
+   busArbiter.m68k_kind = BUS_K_FETCH;
+   v = m68k_read_memory_8(address);
+   busArbiter.m68k_kind = BUS_K_READ;
+   return v;
+}
+
+unsigned int m68k_fetch_16(unsigned int address)
+{
+   unsigned int v;
+   busArbiter.m68k_kind = BUS_K_FETCH;
+   v = m68k_read_memory_16(address);
+   busArbiter.m68k_kind = BUS_K_READ;
+   return v;
+}
+
+unsigned int m68k_fetch_32(unsigned int address)
+{
+   unsigned int v;
+   busArbiter.m68k_kind = BUS_K_FETCH;
+   v = m68k_read_memory_32(address);
+   busArbiter.m68k_kind = BUS_K_READ;
+   return v;
+}
 
 unsigned int m68k_read_disassembler_8(unsigned int address)
 {
@@ -1764,9 +1799,113 @@ double JaguarSliceElapsedUs(uint32_t who)
  * consume one 68K cycle.  A slice can be fully consumed (the 68K runs
  * zero cycles) when occupancy exceeds it; the remainder carries into
  * the next slice, so no time is lost or invented. */
+/* VJ_PCPROF=file: a 68K PC profile.  Each slice's starting PC is
+ * charged the cycles that slice ran or sat stalled; the histogram is
+ * written as "pc cycles" lines at exit.  VJ_PCPROF_SKIP=n skips the
+ * first n million 68K cycles (boot, menus).  Off unless set. */
+#define PCPROF_N 65536
+static uint32_t pcprof_pc[PCPROF_N];
+static uint64_t pcprof_w[PCPROF_N];
+static int pcprof_on = -1;
+/* VJ_PCPROF_CALLERS=lo-hi[,lo-hi...] (hex): slices starting inside one
+ * of these ranges are also charged to the caller, found by scanning the
+ * stack for a return address just after a jsr/bsr outside the ranges. */
+static uint32_t pcprof_rng[16][2];
+static int pcprof_nrng;
+static uint32_t pcprof_cpc[PCPROF_N];
+static uint64_t pcprof_cw[PCPROF_N];
+static int pcprof_inrng(uint32_t a)
+{
+   int i;
+   for (i = 0; i < pcprof_nrng; i++)
+      if (a >= pcprof_rng[i][0] && a < pcprof_rng[i][1])
+         return 1;
+   return 0;
+}
+static uint32_t pcprof_rd32(uint32_t a)
+{
+   a &= 0x1FFFFF;
+   return GET32(jaguarMainRAM, a);
+}
+static uint16_t pcprof_rd16(uint32_t a)
+{
+   a &= 0x1FFFFF;
+   return (uint16_t)((jaguarMainRAM[a] << 8) | jaguarMainRAM[a + 1]);
+}
+static uint64_t pcprof_t, pcprof_skip;
+static void pcprof_dump(void)
+{
+   const char *fn = getenv("VJ_PCPROF");
+   FILE *f = fn ? fopen(fn, "w") : NULL;
+   int i;
+   if (!f)
+      return;
+   for (i = 0; i < PCPROF_N; i++)
+      if (pcprof_w[i])
+         fprintf(f, "%06x %llu\n", pcprof_pc[i],
+                 (unsigned long long)pcprof_w[i]);
+   for (i = 0; i < PCPROF_N; i++)
+      if (pcprof_cw[i])
+         fprintf(f, "c %06x %llu\n", pcprof_cpc[i],
+                 (unsigned long long)pcprof_cw[i]);
+   fclose(f);
+}
+static void pcprof_charge(uint32_t cycles)
+{
+   uint32_t pc, h;
+   if (pcprof_on < 0) {
+      const char *sk = getenv("VJ_PCPROF_SKIP");
+      const char *cr = getenv("VJ_PCPROF_CALLERS");
+      pcprof_on = getenv("VJ_PCPROF") != NULL;
+      while (cr && *cr && pcprof_nrng < 16) {
+         char *e;
+         pcprof_rng[pcprof_nrng][0] = (uint32_t)strtoul(cr, &e, 16);
+         if (*e != '-')
+            break;
+         pcprof_rng[pcprof_nrng][1] = (uint32_t)strtoul(e + 1, &e, 16);
+         pcprof_nrng++;
+         cr = *e == ',' ? e + 1 : e;
+      }
+      pcprof_skip = sk ? strtoull(sk, NULL, 10) * 1000000ull : 0;
+      if (pcprof_on)
+         atexit(pcprof_dump);
+   }
+   if (!pcprof_on)
+      return;
+   pcprof_t += cycles;
+   if (pcprof_t < pcprof_skip)
+      return;
+   pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC) & 0xFFFFFF;
+   h = (pc * 2654435761u) >> 16;
+   while (pcprof_w[h] && pcprof_pc[h] != pc)
+      h = (h + 1) & (PCPROF_N - 1);
+   pcprof_pc[h] = pc;
+   pcprof_w[h] += cycles;
+   if (pcprof_nrng && pcprof_inrng(pc)) {
+      uint32_t sp = (uint32_t)m68k_get_reg(NULL, M68K_REG_A7), k, c = 0;
+      for (k = 0; k < 64; k += 2) {
+         uint32_t r = pcprof_rd32(sp + k);
+         if (r < 0x4000 || r >= 0x200000 || (r & 1) || pcprof_inrng(r))
+            continue;
+         if (pcprof_rd16(r - 6) == 0x4EB9 || (pcprof_rd16(r - 2) & 0xFF00) == 0x6100
+             || pcprof_rd16(r - 4) == 0x6100 || (pcprof_rd16(r - 4) & 0xFFF8) == 0x4EA8
+             || (pcprof_rd16(r - 2) & 0xFFF8) == 0x4E90) {
+            c = r;
+            break;
+         }
+      }
+      h = (c * 2654435761u) >> 16;
+      while (pcprof_cw[h] && pcprof_cpc[h] != c)
+         h = (h + 1) & (PCPROF_N - 1);
+      pcprof_cpc[h] = c;
+      pcprof_cw[h] += cycles;
+   }
+}
+
 static void M68KExecuteWithStalls(uint32_t cycles)
 {
    uint32_t stall;
+   pcprof_charge(cycles);
    m68kSliceStall = 0;
    /* The drain is deliberately NOT gated on busArbiter.enabled: the
     * pending-stall channel is shared by the dram_timing model (whose
