@@ -53,6 +53,10 @@ void CrashDetectNoteBlit(uint32_t b_count, uint32_t b_cmd, uint32_t a1_base,
 #include "bus_arbiter.h"
 struct BusArbiter busArbiter;
 void GPUChargeBusStall(uint32_t sysclks) { (void)sysclks; }
+/* the 68K's registers: measured mode stalls the 68K for a blit it starts
+ * (regs.remainingCycles); measured mode stays off here */
+#include "../src/m68000/cpudefs.h"
+struct regstruct regs;
 
 static int failures = 0;
 
